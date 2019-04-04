@@ -13,16 +13,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <sys/time.h>
-//#include <time.h>
 #include <iostream>
 #include "hidapi.h"
-
-// Headers needed for sleeping.
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <unistd.h>
-#endif
 
 using namespace std;
 
@@ -56,11 +48,6 @@ int main(int argc, char* argv[])
 	string setHeartbeatOff = "B204F10200";
 	string getSystemIssueFlags = "B2032700";
 
-#ifdef WIN32
-	UNREFERENCED_PARAMETER(argc);
-	UNREFERENCED_PARAMETER(argv);
-#endif
-
 	if (hid_init())
 		return -1;
 
@@ -77,36 +64,30 @@ int main(int argc, char* argv[])
 	res = hid_get_manufacturer_string(handle, wstr, MAX_STR);
 	if (res < 0)
 		printf("Unable to read manufacturer string\n");
-	printf("\nManufacturer String: %ls\n", wstr);
+	else
+		printf("\nManufacturer String: %ls\n", wstr);
 
 	// Read the Product String
 	wstr[0] = 0x0000;
 	res = hid_get_product_string(handle, wstr, MAX_STR);
 	if (res < 0)
 		printf("Unable to read product string\n");
-	printf("Product String: %ls\n", wstr);
+	else
+		printf("Product String: %ls\n", wstr);
 
 	// Read the Serial Number String
 	wstr[0] = 0x0000;
 	res = hid_get_serial_number_string(handle, wstr, MAX_STR);
 	if (res < 0)
 		printf("Unable to read serial number string\n");
-	printf("Serial Number String: (%d) %ls\n\n", wstr[0], wstr);
+	else
+		printf("Serial Number String: (%d) %ls\n\n", wstr[0], wstr);
 
 	// Set the hid_read() function to be non-blocking.
 	hid_set_nonblocking(handle, 1);
 
 	// Read the serial number (cmd 0x25). The first byte is always (0xB2).
 	commandQueue = turnMIC1On + readSerialNumber + readHardwareVersion + readFirmwareVersion;
-
-	// Read requested state. hid_read() has been set to be
-	// non-blocking by the call to hid_set_nonblocking() above.
-	// This loop demonstrates the non-blocking nature of hid_read().
-	//int ticksEverySecond = 4;
-	//int intervalTime = CLOCKS_PER_SEC / ticksEverySecond;
-	//clock_t timerSafeWrite = 0;  // timer used to guard safe writing of new commands to PIC. 0 will allow immidiate writting in main loop
-	//clock_t timerPeriodicCommands = clock() + intervalTime;	// timer used to tracking periodic commands. Next commands are added later.
-	//clock_t t, t0=0;
 
 	res = 0;
 	int count = 0;
@@ -118,6 +99,7 @@ int main(int argc, char* argv[])
 	string lastTriggers = "";
 	memset(buf, 0, sizeof(buf));
 	printf("Start dialogue with the PIC.\n");
+	printf("The triggers are Pin4-Pin3-Pin6-Pin5 NUL-NUL-LSB-SRN MIC2-MIC1-EMG-RFI LP-CHG-AUX4-HIV TMP-PUR-IMP-IGN");
 	while (true)
 	{
 		// To sleep for 1ms. This may significantly reduce the CPU usage
@@ -141,7 +123,6 @@ int main(int argc, char* argv[])
 			printf("\nUnable to read from the PIC.\n");
 			printf("Error: %ls\n", hid_error(handle));
 			hid_close(handle);
-			//hid_exit();
 			handle = 0;
 			continue;
 		}
@@ -211,7 +192,7 @@ int main(int argc, char* argv[])
 		// Check if it is time to add a periodic command
 		count++;
 		if (count >= 1000)
-			count = 0;
+			count = 0;  // 1s=1000ms cycle
 
 		switch (count)
 		{
@@ -232,9 +213,8 @@ int main(int argc, char* argv[])
 		}
 
 		// Check if it is safe to send a new command to PIC
-		if (commandQueue.length() > 3)
+		if (commandQueue.length() >= 6)
 		{
-			//timerSafeWrite = timerPeriodicCommands; // hold next sending till successful read or next new command
 			lastSend = tv.tv_usec; // sending moment in microseconds
 			res = sendPIC(handle, &commandQueue);
 			if (res < 0)
@@ -242,7 +222,6 @@ int main(int argc, char* argv[])
 				printf("\nUnable to write to the PIC.\n");
 				printf("Error: %ls\n", hid_error(handle));
 				hid_close(handle);
-				//hid_exit();
 				handle = 0;
 				continue;
 			}
@@ -255,10 +234,6 @@ int main(int argc, char* argv[])
 
 	/* Free static HIDAPI objects. */
 	hid_exit();
-
-#ifdef WIN32
-	system("pause");
-#endif
 
 	return 0;
 }
@@ -277,8 +252,7 @@ int sendPIC(hid_device *handle, string *cmd)
 	unsigned char crc = 0;
 
 	memset(buf, 0, sizeof(buf));
-	buf[0] = 0xB2;
-	buf[1] = 0x03; // assign an initial length
+	buf[1] = 0x03; // assign an initial length, required in for loop
 	len = len / 2;
 	for (int i = 0; i < buf[1] + 1; i++)
 	{
@@ -289,7 +263,7 @@ int sendPIC(hid_device *handle, string *cmd)
 	len = buf[1] & 0xFF;
 	buf[len] = crc;
 
-	if (len < 3 || len > 20)
+	if (len < 3 || len > 60 || buf[0] != 0xB2)
 	{
 		printf("\nInvalid command %s in queue.\n", cmd->c_str());
 		cmd->assign("");
@@ -297,7 +271,7 @@ int sendPIC(hid_device *handle, string *cmd)
 	}
 
 	// Update the command queue
-	if (buf[1] < cmd->length())
+	if (buf[1] + buf[1] < cmd->length())
 		cmd->assign(cmd->substr(len + len + 2));
 	else
 		cmd->assign("");
